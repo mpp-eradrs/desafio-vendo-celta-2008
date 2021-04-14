@@ -155,15 +155,7 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
   
-  int vendocelta = 0;
-
   #pragma acc kernels
-  for (int i = 0; i < 100; i++) {
-    vendocelta += 50;
-  }
-  std::cout << vendocelta << std::endl;
-
-
   for (ll=0; ll<NUM_VARS; ll++) {
     for (k=0; k<nnz; k++) {
       for (i=0; i<nnx; i++) {
