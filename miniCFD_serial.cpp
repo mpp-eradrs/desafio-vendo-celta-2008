@@ -155,10 +155,9 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
   std::cout << NUM_VARS*nnz*nnx << std::endl;
+  #pragma acc kernels loop
   for (ll=0; ll<NUM_VARS; ll++) {
-    #pragma acc kernels
     for (k=0; k<nnz; k++) {
-      #pragma acc loop
       for (i=0; i<nnx; i++) {
         inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
         indt = ll*nnz*nnx + k*nnx + i;
