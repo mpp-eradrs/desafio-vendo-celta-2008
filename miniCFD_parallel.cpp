@@ -1,7 +1,7 @@
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // miniCFD
-// Author: Omitted
+// Author: Granzo
 //////////////////////////////////////////////////////////////////////////////////////////
 
 #include <stdlib.h>
@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <ctime>
 #include <iostream>
+#include <omp.h>
 
 const double pi        = 3.14159265358979323846264338327;   //Pi
 const double grav      = 9.8;                               //Gravitational acceleration (m / s^2)
@@ -137,7 +138,7 @@ void do_timestep( double *state , double *state_tmp , double *flux , double *ten
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
 void do_semi_step( double *state_init , double *state_forcing , double *state_out , double dt , int dir , double *flux , double *tend ) {
-  int i, k, ll, inds, indt;
+  // int i, k, ll;
   if        (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
     exchange_border_x(state_forcing);
@@ -154,18 +155,23 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-  std::cout << NUM_VARS*nnz*nnx << std::endl;
-  for (ll=0; ll<NUM_VARS; ll++) {
-    #pragma acc kernels
-    for (k=0; k<nnz; k++) {
-      #pragma acc loop
-      for (i=0; i<nnx; i++) {
-        inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-        indt = ll*nnz*nnx + k*nnx + i;
+  // int min_val_state = hs*(nnx+2*hs);
+  int max_val_state = (nnx+2*hs)*(nnz+2*hs)*NUM_VARS;
+  int max_val_tend = nx_cfd*nz_cfd*NUM_VARS;
+
+  // #pragma acc data copyin(state_init[0:max_val_state], tend[0:max_val_tend]), copyout(state_out[0:max_val_state])
+  // #pragma acc parallel loop collapse(2)
+  #pragma omp parallel for
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int k=0; k<nnz; k++) {
+      for (int i=0; i<nnx; i++) {
+        int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+        int indt = ll*nnz*nnx + k*nnx + i;
         state_out[inds] = state_init[inds] + dt * tend[indt];
       }
     }
   }
+  
 }
 
 
@@ -174,54 +180,72 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 //First, compute the flux vector at each cell interface in the x-direction (including viscosity)
 //Then, compute the tendencies using those fluxes
 void do_dir_x( double *state , double *flux , double *tend ) {
-  int    i,k,ll,s,inds,indf1,indf2,indt;
-  double r,u,w,t,p, stencil[4], d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
   //Compute the hyperviscosity coeficient
-  v_coef = -hv * dx / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nnz; k++) {
-    for (i=0; i<nnx+1; i++) {
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s < cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-          stencil[s] = state[inds];
+  //int min_val_theta_cell = hs
+  // int max_val_theta_cell = (nz_cfd+2*hs);
+
+  int min_val_state = hs*(nnx+2*hs);
+  int max_val_state = (nx_cfd+2*hs)*(nz_cfd+2*hs)*NUM_VARS;
+  int max_val_flux = (nx_cfd+1)*(nz_cfd+1)*NUM_VARS;
+  int max_val_tend = nx_cfd*nz_cfd*NUM_VARS;
+
+  double stencil[NUM_VARS], d_vals[NUM_VARS], vals[NUM_VARS], v_coef = -hv * dx / (16*dt);
+  
+  // cfd_dens_cell[hs:nnz+hs], cfd_dens_theta_cell[0:max_val_theta_cell]
+  #pragma acc data create(stencil, d_vals, vals)
+  #pragma acc data copyin(state[min_val_state:max_val_state]), copy(flux[0:max_val_flux])
+  {
+    #pragma omp parallel for
+    #pragma acc parallel loop collapse(2) private(stencil, vals, d_vals)
+    for (int k=0; k<nnz; k++) {
+      for (int i=0; i<nnx+1; i++) {
+        //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+        #pragma acc loop
+        for (int ll=0; ll<NUM_VARS; ll++) {
+          #pragma acc loop
+          for (int s=0; s < cfd_size; s++) {
+            int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
+            stencil[s] = state[inds];
+          }
+          //Fourth-order-accurate interpolation of the state
+          vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+          //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+          d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
         }
-        //Fourth-order-accurate interpolation of the state
-        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-        d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+
+        //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+        double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
+        double u = vals[POS_UMOM] / r;
+        double w = vals[POS_WMOM] / r;
+        double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
+        double p = pow((r*t),gamm)*C0;
+
+        //Compute the flux vector
+        flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
+        flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
+        flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
+        flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
       }
-
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[POS_DENS] + cfd_dens_cell[k+hs];
-      u = vals[POS_UMOM] / r;
-      w = vals[POS_WMOM] / r;
-      t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
-      p = pow((r*t),gamm)*C0;
-
-      //Compute the flux vector
-      flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
-      flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
-      flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
-      flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
     }
-  }
 
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nnz; k++) {
-      for (i=0; i<nnx; i++) {
-        indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-        indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-        indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
-        tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
+    /////////////////////////////////////////////////
+    // TODO: THREAD ME
+    /////////////////////////////////////////////////
+    //Use the fluxes to compute tendencies for each cell
+    #pragma acc data present (flux), copyout(tend[0:max_val_tend])
+    #pragma acc parallel loop collapse(3)
+    for (int ll=0; ll<NUM_VARS; ll++) {
+      for (int k=0; k<nnz; k++) {
+        for (int i=0; i<nnx; i++) {
+          int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+          int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
+          int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
+          tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
+        }
       }
     }
   }
@@ -241,54 +265,69 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nnz+1; k++) {
-    for (i=0; i<nnx; i++) {
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s<cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-          stencil[s] = state[inds];
-        }
-        //Fourth-order-accurate interpolation of the state
-        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state
-        d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-      }
 
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[POS_DENS] + cfd_dens_int[k];
-      u = vals[POS_UMOM] / r;
-      w = vals[POS_WMOM] / r;
-      t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
-      p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
-      //Enforce vertical boundary condition and exact mass conservation
-      if (k == 0 || k == nnz) {
-        w                = 0;
-        d_vals[POS_DENS] = 0;
-      }
+  int min_val_state = hs*(nnx+2*hs);
+  int max_val_state = (nx_cfd+2*hs)*(nz_cfd+2*hs)*NUM_VARS;
+  int max_val_flux = (nx_cfd+1)*(nz_cfd+1)*NUM_VARS;
+  int max_val_tend = nx_cfd*nz_cfd*NUM_VARS;
 
-      //Compute the flux vector with viscosity
-      flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
-      flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
-      flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
-      flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
-    }
-  }
-
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nnz; k++) {
+  #pragma acc data create(stencil, d_vals, vals)
+  #pragma acc data copyin(state[min_val_state:max_val_state]), copy(flux[0:max_val_flux])
+  {
+    #pragma acc parallel loop collapse(2) private(stencil, vals, d_vals)
+    for (k=0; k<nnz+1; k++) {
       for (i=0; i<nnx; i++) {
-        indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-        indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
-        indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
-        tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
-        if (ll == POS_WMOM) {
-          inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
-          tend[indt] = tend[indt] - state[inds]*grav;
+        //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+        #pragma acc loop
+        for (ll=0; ll<NUM_VARS; ll++) {
+          #pragma acc loop
+          for (s=0; s<cfd_size; s++) {
+            inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
+            stencil[s] = state[inds];
+          }
+          //Fourth-order-accurate interpolation of the state
+          vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+          //First-order-accurate interpolation of the third spatial derivative of the state
+          d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+        }
+
+        //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+        r = vals[POS_DENS] + cfd_dens_int[k];
+        u = vals[POS_UMOM] / r;
+        w = vals[POS_WMOM] / r;
+        t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
+        p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
+        //Enforce vertical boundary condition and exact mass conservation
+        if (k == 0 || k == nnz) {
+          w                = 0;
+          d_vals[POS_DENS] = 0;
+        }
+
+        //Compute the flux vector with viscosity
+        flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
+        flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
+        flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
+        flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
+      }
+    }
+
+    /////////////////////////////////////////////////
+    // TODO: THREAD ME
+    /////////////////////////////////////////////////
+    //Use the fluxes to compute tendencies for each cell
+    #pragma acc data present (flux), copyout(tend[0:max_val_tend])
+    #pragma acc parallel loop collapse(3)
+    for (ll=0; ll<NUM_VARS; ll++) {
+      for (k=0; k<nnz; k++) {
+        for (i=0; i<nnx; i++) {
+          indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+          indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
+          indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
+          tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
+          if (ll == POS_WMOM) {
+            inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
+            tend[indt] = tend[indt] - state[inds]*grav;
+          }
         }
       }
     }
