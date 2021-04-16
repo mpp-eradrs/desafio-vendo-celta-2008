@@ -180,8 +180,8 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 //First, compute the flux vector at each cell interface in the x-direction (including viscosity)
 //Then, compute the tendencies using those fluxes
 void do_dir_x( double *state , double *flux , double *tend ) {
-  int    i,k,ll,s,inds,indf1,indf2,indt;
-  double r,u,w,t,p, stencil[4], d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
+  int    i,k,ll,inds,indf1,indf2,indt;
+  double r,u,w,t,p, d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
   //Compute the hyperviscosity coeficient
   v_coef = -hv * dx / (16*dt);
   /////////////////////////////////////////////////
@@ -189,23 +189,37 @@ void do_dir_x( double *state , double *flux , double *tend ) {
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
 
-#pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_cell [0:max_val_cell], cfd_dens_theta_cell [0:max_val_cell]), create(stencil, vals, d_vals)
-#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals), vector_length(32)
+#pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_cell [0:max_val_cell], cfd_dens_theta_cell [0:max_val_cell]), create(vals, d_vals)
+#pragma acc parallel loop collapse(2) private(vals, d_vals), vector_length(32)
   for (k=0; k<nnz; k++) {
     for (i=0; i<nnx+1; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      #pragma acc loop
-      for (ll=0; ll<NUM_VARS; ll++) {
-        #pragma acc loop
-        for (s=0; s < cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-          stencil[s] = state[inds];
-        }
-        //Fourth-order-accurate interpolation of the state
-        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-        d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-      }
+      // #pragma acc loop
+      // for (ll=0; ll<NUM_VARS; ll++) {
+      //   #pragma acc loop
+      //   for (s=0; s < cfd_size; s++) {
+      //     inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
+      //     stencil[s] = state[inds];
+      //   }
+      //   //Fourth-order-accurate interpolation of the state
+      //   vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+      //   //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+      //   d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+      // }
+      
+      // LOOP UNROLL
+      inds = 0*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+      vals[0] = -state[inds]/12+7*state[inds+1]/12+7*state[inds+2]/12-state[inds+3]/12;
+      d_vals[0] = -state[inds] + 3*state[inds+1] - 3*state[inds+2] + state[inds+3];
+      inds = 1*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+      vals[1] = -state[inds]/12+7*state[inds+1]/12+7*state[inds+2]/12-state[inds+3]/12;
+      d_vals[1] = -state[inds] + 3*state[inds+1] - 3*state[inds+2] + state[inds+3];
+      inds = 2*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+      vals[2] = -state[inds]/12+7*state[inds+1]/12+7*state[inds+2]/12-state[inds+3]/12;
+      d_vals[2] = -state[inds] + 3*state[inds+1] - 3*state[inds+2] + state[inds+3];
+      inds = 3*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+      vals[3] = -state[inds]/12+7*state[inds+1]/12+7*state[inds+2]/12-state[inds+3]/12;
+      d_vals[3] = -state[inds] + 3*state[inds+1] - 3*state[inds+2] + state[inds+3];
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
       r = vals[POS_DENS] + cfd_dens_cell[k+hs];
@@ -247,31 +261,46 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 //First, compute the flux vector at each cell interface in the z-direction (including viscosity)
 //Then, compute the tendencies using those fluxes
 void do_dir_z( double *state , double *flux , double *tend ) {
-  int    i,k,ll,s, inds, indf1, indf2, indt;
-  double r,u,w,t,p, stencil[4], d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
+  int    i,k,ll, inds, indf1, indf2, indt;
+  double r,u,w,t,p, d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
   //Compute the viscosity coeficient
   v_coef = -hv * dz / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-#pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_int [0:max_val_int], cfd_dens_theta_int [0:max_val_int], cfd_pressure_int [0:max_val_int]), create(stencil, vals, d_vals)
-#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals), vector_length(32)
+#pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_int [0:max_val_int], cfd_dens_theta_int [0:max_val_int], cfd_pressure_int [0:max_val_int]), create(vals, d_vals)
+#pragma acc parallel loop collapse(2) private(vals, d_vals), vector_length(32)
   for (k=0; k<nnz+1; k++) {
     for (i=0; i<nnx; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      #pragma acc loop
-      for (ll=0; ll<NUM_VARS; ll++) {
-        #pragma acc loop
-        for (s=0; s<cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-          stencil[s] = state[inds];
-        }
-        //Fourth-order-accurate interpolation of the state
-        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state
-        d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-      }
+      // #pragma acc loop
+      // for (ll=0; ll<NUM_VARS; ll++) {
+      //   #pragma acc loop
+      //   for (s=0; s<cfd_size; s++) {
+      //     inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
+      //     stencil[s] = state[inds];
+      //   }
+      //   //Fourth-order-accurate interpolation of the state
+      //   vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+      //   //First-order-accurate interpolation of the third spatial derivative of the state
+      //   d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+      // }
+
+      // LOOP UNROLL
+      inds = 0*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+      vals[0] = -state[inds+(k+0)*(nnx+2*hs)]/12+7*state[inds+(k+1)*(nnx+2*hs)]/12+7*state[inds+(k+2)*(nnx+2*hs)]/12-state[inds+(k+3)*(nnx+2*hs)]/12;
+      d_vals[0] = -state[inds+(k+0)*(nnx+2*hs)] + 3*state[inds+(k+1)*(nnx+2*hs)] - 3*state[inds+(k+2)*(nnx+2*hs)] + state[inds+(k+3)*(nnx+2*hs)];
+      inds = 1*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+      vals[1] = -state[inds+(k+0)*(nnx+2*hs)]/12+7*state[inds+(k+1)*(nnx+2*hs)]/12+7*state[inds+(k+2)*(nnx+2*hs)]/12-state[inds+(k+3)*(nnx+2*hs)]/12;
+      d_vals[1] = -state[inds+(k+0)*(nnx+2*hs)] + 3*state[inds+(k+1)*(nnx+2*hs)] - 3*state[inds+(k+2)*(nnx+2*hs)] + state[inds+(k+3)*(nnx+2*hs)];
+      inds = 2*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+      vals[2] = -state[inds+(k+0)*(nnx+2*hs)]/12+7*state[inds+(k+1)*(nnx+2*hs)]/12+7*state[inds+(k+2)*(nnx+2*hs)]/12-state[inds+(k+3)*(nnx+2*hs)]/12;
+      d_vals[2] = -state[inds+(k+0)*(nnx+2*hs)] + 3*state[inds+(k+1)*(nnx+2*hs)] - 3*state[inds+(k+2)*(nnx+2*hs)] + state[inds+(k+3)*(nnx+2*hs)];
+      inds = 3*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+      vals[3] = -state[inds+(k+0)*(nnx+2*hs)]/12+7*state[inds+(k+1)*(nnx+2*hs)]/12+7*state[inds+(k+2)*(nnx+2*hs)]/12-state[inds+(k+3)*(nnx+2*hs)]/12;
+      d_vals[3] = -state[inds+(k+0)*(nnx+2*hs)] + 3*state[inds+(k+1)*(nnx+2*hs)] - 3*state[inds+(k+2)*(nnx+2*hs)] + state[inds+(k+3)*(nnx+2*hs)];
+    
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
       r = vals[POS_DENS] + cfd_dens_int[k];
