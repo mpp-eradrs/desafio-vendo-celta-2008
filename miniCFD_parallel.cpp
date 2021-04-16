@@ -25,7 +25,7 @@ const double hv   = 0.25;     //How strong to diffuse the solution: hv \in [0:1]
 const double cfl       = 1.50;    //"Courant, Friedrichs, Lewy" number (for numerical stability)
 const double max_speed = 450;        //Assumed maximum wave speed during the simulation (speed of sound + speed of wind) (meter / sec)
 const int hs        = 2;          //"Halo" size: number of cells beyond the MPI tasks's domain needed for a full "stencil" of information for reconstruction
-const int cfd_size = 4;          //Size of the stencil used for interpolation
+// const int cfd_size = 4;          //Size of the stencil used for interpolation
 
 //Parameters for indexing and flags
 const int NUM_VARS = 4;           //Number of fluid state variables
@@ -309,10 +309,13 @@ void do_dir_z( double *state , double *flux , double *tend ) {
       t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
       p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
       //Enforce vertical boundary condition and exact mass conservation
-      if (k == 0 || k == nnz) {
-        w                = 0;
-        d_vals[POS_DENS] = 0;
-      }
+      // if (k == 0 || k == nnz) {
+      //   w                = 0;
+      //   d_vals[POS_DENS] = 0;
+      // }
+
+      w *= (bool)(k % nnz);
+      d_vals[POS_DENS] *= (bool)(k % nnz);
 
       //Compute the flux vector with viscosity
       flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
@@ -374,7 +377,6 @@ void exchange_border_x( double *state ) {
   ////////////////////////////////////////////////////
 
   if (config_spec == CONFIG_IN_TEST6) {
-    std::cout << "NAO ENTRA NO IF CONFIG_IN_TEST6 NEH?" << std::endl;
     if (myrank == 0) {
 #pragma acc data present(state [0:max_val_state], cfd_dens_cell [0:max_val_cell], cfd_dens_theta_cell [0:max_val_cell])
 #pragma acc parallel loop collapse(2)
