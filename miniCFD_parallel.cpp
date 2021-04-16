@@ -25,7 +25,7 @@ const double hv   = 0.25;     //How strong to diffuse the solution: hv \in [0:1]
 const double cfl       = 1.50;    //"Courant, Friedrichs, Lewy" number (for numerical stability)
 const double max_speed = 450;        //Assumed maximum wave speed during the simulation (speed of sound + speed of wind) (meter / sec)
 const int hs        = 2;          //"Halo" size: number of cells beyond the MPI tasks's domain needed for a full "stencil" of information for reconstruction
-const int cfd_size = 4;          //Size of the stencil used for interpolation
+// const int cfd_size = 4;          //Size of the stencil used for interpolation
 
 //Parameters for indexing and flags
 const int NUM_VARS = 4;           //Number of fluid state variables
