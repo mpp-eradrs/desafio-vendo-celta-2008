@@ -190,7 +190,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
   //Compute fluxes in the x-direction for each cell
 
 #pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_cell [0:max_val_cell], cfd_dens_theta_cell [0:max_val_cell]), create(stencil, vals, d_vals)
-#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals)
+#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals), vector_length(32)
   for (k=0; k<nnz; k++) {
     for (i=0; i<nnx+1; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
@@ -256,7 +256,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
 #pragma acc data present(state [0:max_val_state], flux [0:max_val_flux], cfd_dens_int [0:max_val_int], cfd_dens_theta_int [0:max_val_int], cfd_pressure_int [0:max_val_int]), create(stencil, vals, d_vals)
-#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals)
+#pragma acc parallel loop collapse(2) private(stencil, vals, d_vals), vector_length(32)
   for (k=0; k<nnz+1; k++) {
     for (i=0; i<nnx; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
